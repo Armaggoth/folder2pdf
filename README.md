@@ -26,7 +26,7 @@ pip install -e .
 
 ```bash
 folder2pdf .
-folder2pdf --overwrite .
+folder2pdf --force .
 folder2pdf --recurse .
 folder2pdf --recurse --merge .
 folder2pdf "/path/to/folder"
@@ -45,4 +45,18 @@ folder2pdf help
 python -m pip install --upgrade build twine
 python -m build
 python -m twine upload dist/*
+```
+
+## Development setup
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install -e .
+git config core.hooksPath .githooks  # enables pre-commit test runs
+```
+
+Run tests:
+
+```bash
+.venv/bin/pytest tests/
 ```

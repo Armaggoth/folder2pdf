@@ -5,13 +5,10 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
-import os
 import re
-import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import List
 
 SUPPORTED_EXTENSIONS = {
     ".jpg",
@@ -35,7 +32,7 @@ def ask_yes_no(question: str) -> bool:
 def install_python_package(package_name: str) -> bool:
     command = [sys.executable, "-m", "pip", "install", package_name]
     try:
-        subprocess.run(command, check=True)
+        subprocess.run(command, check=True, capture_output=True)
         return True
     except subprocess.CalledProcessError:
         return False
@@ -59,21 +56,12 @@ def ensure_dependency(module_name: str, package_name: str, reason: str) -> bool:
     return False
 
 
-def maybe_install_command() -> None:
-    command_location = shutil.which("folder2pdf")
-    if command_location:
-        return
-
-    print("Notice: folder2pdf command is not installed on PATH.", file=sys.stderr)
-    print("Install this package with: pip install folder2pdf", file=sys.stderr)
-
-
-def natural_sort_key(text: str) -> List[object]:
+def natural_sort_key(text: str) -> list[object]:
     # Sorts filenames like image2 before image10.
     return [int(part) if part.isdigit() else part.lower() for part in re.split(r"(\d+)", text)]
 
 
-def collect_images(folder: Path) -> List[Path]:
+def collect_images(folder: Path) -> list[Path]:
     images = []
     for item in folder.iterdir():
         if not item.is_file():
@@ -86,30 +74,23 @@ def collect_images(folder: Path) -> List[Path]:
     return images
 
 
-def find_folders_with_images(root: Path) -> List[Path]:
-    folders = []
-    for current_root, _, _ in os.walk(root):
-        current_folder = Path(current_root)
-        if collect_images(current_folder):
-            folders.append(current_folder)
+def find_folders_with_images(root: Path) -> list[tuple[Path, list[Path]]]:
+    results = []
+    for dirpath, _, _ in root.walk():
+        images = collect_images(dirpath)
+        if images:
+            results.append((dirpath, images))
+    results.sort(key=lambda pair: natural_sort_key(str(pair[0].relative_to(root))))
+    return results
 
-    folders.sort(key=lambda p: natural_sort_key(str(p.relative_to(root))))
-    return folders
 
-
-def get_img2pdf_module():
+def create_pdf(images: list[Path], output_pdf: Path) -> None:
     import img2pdf
-
-    return img2pdf
-
-
-def create_pdf(images: List[Path], output_pdf: Path) -> None:
-    img2pdf = get_img2pdf_module()
     with output_pdf.open("wb") as out_file:
         out_file.write(img2pdf.convert([str(path) for path in images]))
 
 
-def merge_pdfs(pdf_paths: List[Path], output_pdf: Path) -> bool:
+def merge_pdfs(pdf_paths: list[Path], output_pdf: Path) -> bool:
     if not ensure_dependency("pypdf", "pypdf", "required for --merge"):
         return False
 
@@ -127,6 +108,18 @@ def merge_pdfs(pdf_paths: List[Path], output_pdf: Path) -> bool:
     return True
 
 
+def _confirm_overwrite(path: Path, force: bool) -> bool:
+    """Return True if it's safe to write to path (doesn't exist, forced, or user confirmed)."""
+    if not path.exists() or force:
+        return True
+    return ask_yes_no(f"Output already exists: {path}. Overwrite?")
+
+
+def _print_created(output_pdf: Path, images: list[Path]) -> None:
+    print(f"Created: {output_pdf}")
+    print(f"Pages: {len(images)}")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="folder2pdf",
@@ -134,7 +127,7 @@ def build_parser() -> argparse.ArgumentParser:
         epilog=(
             "Examples:\n"
             "  folder2pdf .\n"
-            "  folder2pdf --overwrite .\n"
+            "  folder2pdf --force .\n"
             "  folder2pdf --recurse .\n"
             "  folder2pdf --recurse --merge .\n"
             "  folder2pdf \"/path/to/folder\"\n\n"
@@ -149,10 +142,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Path to folder containing images.",
     )
     parser.add_argument(
-        "-o",
-        "--overwrite",
+        "-f",
+        "--force",
         action="store_true",
-        help="Overwrite output PDF if it already exists.",
+        help="Overwrite existing PDFs without prompting.",
     )
     parser.add_argument(
         "-r",
@@ -170,8 +163,6 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
-    maybe_install_command()
-
     if not ensure_dependency("img2pdf", "img2pdf", "required for image to PDF conversion"):
         return 2
 
@@ -185,14 +176,16 @@ def main() -> int:
     if args.merge and not args.recurse:
         parser.error("--merge can only be used together with --recurse")
 
+    force: bool = args.force
+
     folder = Path(args.folder).expanduser().resolve()
     if not folder.exists() or not folder.is_dir():
         print(f"Error: folder does not exist or is not a directory: {folder}", file=sys.stderr)
         return 1
 
     if args.recurse:
-        folders = find_folders_with_images(folder)
-        if not folders:
+        folder_image_pairs = find_folders_with_images(folder)
+        if not folder_image_pairs:
             print(
                 f"Error: no supported images found in {folder} or its subfolders. "
                 f"Supported extensions: {', '.join(sorted(SUPPORTED_EXTENSIONS))}",
@@ -200,16 +193,11 @@ def main() -> int:
             )
             return 1
 
-        generated_pdfs: List[Path] = []
-        for current_folder in folders:
-            images = collect_images(current_folder)
+        generated_pdfs: list[Path] = []
+        for current_folder, images in folder_image_pairs:
             output_pdf = current_folder / f"{current_folder.name}.pdf"
 
-            if output_pdf.exists() and not args.overwrite:
-                print(
-                    f"Error: output already exists: {output_pdf}. Use --overwrite to replace it.",
-                    file=sys.stderr,
-                )
+            if not _confirm_overwrite(output_pdf, force):
                 return 1
 
             try:
@@ -219,16 +207,13 @@ def main() -> int:
                 return 1
 
             generated_pdfs.append(output_pdf)
-            print(f"Created: {output_pdf}")
-            print(f"Pages: {len(images)}")
+            _print_created(output_pdf, images)
 
         if args.merge:
-            merge_output = Path.cwd().resolve() / f"{Path.cwd().resolve().name}_merged.pdf"
-            if merge_output.exists() and not args.overwrite:
-                print(
-                    f"Error: merged output already exists: {merge_output}. Use --overwrite to replace it.",
-                    file=sys.stderr,
-                )
+            cwd = Path.cwd()
+            merge_output = cwd / f"{cwd.name}_merged.pdf"
+
+            if not _confirm_overwrite(merge_output, force):
                 return 1
 
             if not merge_pdfs(generated_pdfs, merge_output):
@@ -250,11 +235,7 @@ def main() -> int:
 
     output_pdf = folder / f"{folder.name}.pdf"
 
-    if output_pdf.exists() and not args.overwrite:
-        print(
-            f"Error: output already exists: {output_pdf}. Use --overwrite to replace it.",
-            file=sys.stderr,
-        )
+    if not _confirm_overwrite(output_pdf, force):
         return 1
 
     try:
@@ -263,8 +244,7 @@ def main() -> int:
         print(f"Error: failed to create PDF: {exc}", file=sys.stderr)
         return 1
 
-    print(f"Created: {output_pdf}")
-    print(f"Pages: {len(images)}")
+    _print_created(output_pdf, images)
     return 0
 
 
