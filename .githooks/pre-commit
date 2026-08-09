@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Runs the test suite before every commit. Aborts the commit if any test fails.
+
+VENV_PYTEST="$(git rev-parse --show-toplevel)/.venv/bin/pytest"
+
+if [ ! -f "$VENV_PYTEST" ]; then
+  echo "pre-commit: .venv not found. Run: python3 -m venv .venv && .venv/bin/pip install -e ." >&2
+  exit 1
+fi
+
+echo "pre-commit: running tests..."
+"$VENV_PYTEST" tests/ -q --tb=short
