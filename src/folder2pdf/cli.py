@@ -86,8 +86,11 @@ def find_folders_with_images(root: Path) -> list[tuple[Path, list[Path]]]:
 
 def create_pdf(images: list[Path], output_pdf: Path) -> None:
     import img2pdf
+    data = img2pdf.convert([str(path) for path in images])
+    if data is None:
+        raise ValueError("img2pdf produced no output")
     with output_pdf.open("wb") as out_file:
-        out_file.write(img2pdf.convert([str(path) for path in images]))
+        out_file.write(data)
 
 
 def merge_pdfs(pdf_paths: list[Path], output_pdf: Path) -> bool:
